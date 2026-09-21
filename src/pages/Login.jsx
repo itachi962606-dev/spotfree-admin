@@ -6,19 +6,34 @@ import { auth } from "../firebase";
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
 
-/**
- * Admin login is deliberately separate from the Android app's Google Sign-In
- * (spec requirement: "Admin authentication must be separate from normal
- * users"). Email/password here, gated further by the ADMIN_EMAILS allow-list
- * in App.jsx. Swap for Firebase custom claims + a dedicated admins collection
- * for production-grade role management.
- */
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  function getErrorMessage(err) {
+    if (!err) return "Sign-in failed. Please try again.";
+    const code = err.code || "";
+    if (code === "auth/popup-closed-by-user") {
+      return "Sign-in popup was closed before completing.";
+    }
+    if (code === "auth/unauthorized-domain") {
+      const currentHost = window.location.hostname;
+      return `This domain (${currentHost}) is not authorized in Firebase Console. Go to Firebase Console -> Authentication -> Settings -> Authorized Domains and add '${currentHost}'.`;
+    }
+    if (code === "auth/configuration-not-found" || code === "auth/operation-not-allowed") {
+      return "Google Sign-In is not enabled in Firebase Console. Enable Google under Authentication -> Sign-in method.";
+    }
+    if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential") {
+      return "Invalid email or password.";
+    }
+    if (code === "auth/network-request-failed") {
+      return "Network connection error. Check your internet connection.";
+    }
+    return err.message || `Sign-in error: ${code}`;
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -28,7 +43,8 @@ export default function Login() {
       await signInWithEmailAndPassword(auth, email, password);
       navigate("/");
     } catch (err) {
-      setError("Sign-in failed. Check your email and password.");
+      console.error("Email login error:", err);
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -41,7 +57,8 @@ export default function Login() {
       await signInWithPopup(auth, googleProvider);
       navigate("/");
     } catch (err) {
-      setError("Google sign-in failed. Please try again.");
+      console.error("Google login error:", err);
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -67,7 +84,7 @@ export default function Login() {
           Password
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
-        {error && <p className="error-text">{error}</p>}
+        {error && <p className="error-text" style={{ whiteSpace: "pre-line", wordBreak: "break-word" }}>{error}</p>}
         <button type="submit" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
       </form>
     </div>

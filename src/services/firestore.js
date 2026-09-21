@@ -101,3 +101,26 @@ export async function createMood(name) {
 export async function deleteMood(id) {
   await deleteDoc(doc(db, "moods", id));
 }
+
+// ---------- Notifications ----------
+export async function listNotifications() {
+  const snap = await getDocs(query(collection(db, "notifications"), orderBy("createdAt", "desc")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export async function createNotification(notification) {
+  const ref = await addDoc(collection(db, "notifications"), {
+    ...notification,
+    createdAt: Date.now(),
+  });
+  await updateDoc(ref, { id: ref.id });
+  return ref.id;
+}
+
+export async function updateNotification(id, updates) {
+  await updateDoc(doc(db, "notifications", id), updates);
+}
+
+export async function deleteNotification(id) {
+  await deleteDoc(doc(db, "notifications", id));
+}

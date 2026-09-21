@@ -78,6 +78,21 @@ export default function Songs() {
     setShowForm(true);
   }
 
+  function handleAudioFileChange(e) {
+    const file = e.target.files?.[0] || null;
+    setAudioFile(file);
+    if (file) {
+      const audio = new Audio();
+      const objectUrl = URL.createObjectURL(file);
+      audio.src = objectUrl;
+      audio.onloadedmetadata = () => {
+        const detected = Math.round(audio.duration) || 0;
+        setForm((f) => ({ ...f, duration: detected }));
+        URL.revokeObjectURL(objectUrl);
+      };
+    }
+  }
+
   function toggleMood(mood) {
     setForm((f) => ({
       ...f,
@@ -245,12 +260,13 @@ export default function Songs() {
             </label>
 
             <label>Audio File (MP3)
-              <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files?.[0] || null)} />
+              <input type="file" accept="audio/*" onChange={handleAudioFileChange} />
               {form.audioUrl && !audioFile && <span className="hint">Current audio set. Choose a file to replace it.</span>}
-            </label>
-
-            <label>Duration (seconds)
-              <input type="number" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} />
+              {form.duration > 0 && (
+                <span className="hint" style={{ color: "var(--teal)" }}>
+                  Auto-detected duration: {Math.floor(form.duration / 60)}:{String(form.duration % 60).padStart(2, "0")} ({form.duration}s)
+                </span>
+              )}
             </label>
 
             <label>Description
