@@ -9,6 +9,7 @@ import Artists from "./pages/Artists.jsx";
 import Albums from "./pages/Albums.jsx";
 import GenresMoods from "./pages/GenresMoods.jsx";
 import Notifications from "./pages/Notifications.jsx";
+import Settings from "./pages/Settings.jsx";
 
 // Admin allow-list: normal Google accounts should never reach the panel.
 // Configure this via env (comma-separated emails), or swap for a Firestore
@@ -61,6 +62,7 @@ function ProtectedLayout({ children }) {
           <NavLink to="/albums">Albums</NavLink>
           <NavLink to="/genres-moods">Genres &amp; Moods</NavLink>
           <NavLink to="/notifications">Notifications</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <div className="sidebar-footer">
           <span>{user?.email}</span>
@@ -83,6 +85,7 @@ export default function App() {
         <Route path="/albums" element={<ProtectedLayout><Albums /></ProtectedLayout>} />
         <Route path="/genres-moods" element={<ProtectedLayout><GenresMoods /></ProtectedLayout>} />
         <Route path="/notifications" element={<ProtectedLayout><Notifications /></ProtectedLayout>} />
+        <Route path="/settings" element={<ProtectedLayout><Settings /></ProtectedLayout>} />
       </Routes>
     </BrowserRouter>
   );

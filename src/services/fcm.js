@@ -25,3 +25,30 @@ export async function sendPushNotification(notificationData) {
     return { sent: false, error: e.message };
   }
 }
+
+/**
+ * Dispatch an app-update notification to all SpotFree users via the backend endpoint.
+ * Sets `type: "app_update"` so the Android client routes directly to the AppUpdateScreen.
+ *
+ * @param {object} updateRecord — The AppUpdate record containing versionName, releaseNotes, isMandatory, id
+ */
+export async function sendUpdateNotification(updateRecord) {
+  const isMandatory = Boolean(updateRecord.isMandatory);
+  const title = isMandatory
+    ? `Important: SpotFree ${updateRecord.versionName || "Update"} is Required`
+    : `New SpotFree Update: ${updateRecord.versionName || "Available"}`;
+
+  const message = updateRecord.releaseNotes
+    ? `${updateRecord.releaseNotes.slice(0, 120)}${updateRecord.releaseNotes.length > 120 ? "…" : ""}`
+    : "A new version of SpotFree is available. Tap to install.";
+
+  return sendPushNotification({
+    title,
+    message,
+    type: "app_update",
+    id: updateRecord.id || `update_${updateRecord.versionCode}`,
+    versionCode: String(updateRecord.versionCode || ""),
+    versionName: updateRecord.versionName || "",
+    isMandatory: String(isMandatory),
+  });
+}
