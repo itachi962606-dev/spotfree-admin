@@ -7,7 +7,7 @@ import {
   publishAppUpdate,
   deactivateAppUpdate,
 } from "../services/appUpdates";
-import { uploadApk } from "../services/storage";
+import { uploadApkToGitHub } from "../services/githubRelease";
 import { sendUpdateNotification } from "../services/fcm";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 
@@ -128,10 +128,24 @@ export default function Settings() {
     try {
       let apkUrl = form.apkUrl;
       let apkSizeBytes = form.apkSizeBytes;
+      let apkSha256 = form.apkSha256;
 
       if (apkFile) {
-        apkUrl = await uploadApk(apkFile, setUploadPct);
-        apkSizeBytes = apkFile.size;
+        setUploadPct(1);
+        const uploadResult = await uploadApkToGitHub(
+          apkFile,
+          {
+            versionName: form.versionName.trim(),
+            versionCode: code,
+            releaseNotes: form.releaseNotes.trim(),
+          },
+          setUploadPct
+        );
+        apkUrl = uploadResult.apkUrl;
+        apkSizeBytes = uploadResult.apkSizeBytes || apkFile.size;
+        if (uploadResult.sha256) {
+          apkSha256 = uploadResult.sha256;
+        }
       }
 
       const payload = {
@@ -140,9 +154,10 @@ export default function Settings() {
         releaseNotes: form.releaseNotes.trim(),
         isMandatory: Boolean(form.isMandatory),
         isActive: Boolean(form.isActive),
-        apkSha256: form.apkSha256.trim(),
+        apkSha256: (apkSha256 || "").trim(),
         apkUrl: apkUrl || "",
         apkSizeBytes: apkSizeBytes || 0,
+        publishedAt: form.isActive ? Date.now() : (form.publishedAt || null),
       };
 
       let updateId = editingId;
@@ -393,7 +408,7 @@ export default function Settings() {
                 </span>
               )}
               {form.apkUrl && !apkFile && (
-                <span className="hint">Current APK hosted on Firebase Storage. Choose a new file to replace it.</span>
+                <span className="hint">Current APK hosted on GitHub Releases. Choose a new file to replace it.</span>
               )}
             </label>
 
@@ -430,7 +445,11 @@ export default function Settings() {
 
             {saving && uploadPct > 0 && (
               <div style={{ margin: "12px 0" }}>
-                <p className="hint">Uploading APK to Firebase Storage… {uploadPct}%</p>
+                <p className="hint">
+                  {uploadPct < 100
+                    ? `Uploading APK to GitHub Releases… ${uploadPct}%`
+                    : "Publishing release asset to GitHub… please wait"}
+                </p>
                 <div style={{
                   background: "var(--surface)",
                   borderRadius: "4px",
