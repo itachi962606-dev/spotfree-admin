@@ -8,10 +8,16 @@ import {
   deactivateAppUpdate,
 } from "../services/appUpdates";
 import { uploadApkToGitHub } from "../services/githubRelease";
+import {
+  extractGoogleDriveFileId,
+  toGoogleDriveDirectDownloadUrl,
+  isValidGoogleDriveUrl,
+} from "../services/driveUtils";
 import { sendUpdateNotification } from "../services/fcm";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 
 const emptyForm = {
+  distributionMethod: "github", // "github" | "drive"
   versionCode: "",
   versionName: "",
   releaseNotes: "",
@@ -19,6 +25,7 @@ const emptyForm = {
   isActive: false,
   apkSha256: "",
   apkUrl: "",
+  driveUrl: "",
   apkSizeBytes: 0,
 };
 
@@ -63,8 +70,13 @@ export default function Settings() {
   }
 
   function openEdit(item) {
+    const isDrive =
+      item.distributionMethod === "drive" ||
+      Boolean(item.apkUrl && item.apkUrl.includes("drive.google.com"));
+
     setEditingId(item.id);
     setForm({
+      distributionMethod: isDrive ? "drive" : "github",
       versionCode: item.versionCode ?? "",
       versionName: item.versionName || "",
       releaseNotes: item.releaseNotes || "",
@@ -72,6 +84,7 @@ export default function Settings() {
       isActive: Boolean(item.isActive),
       apkSha256: item.apkSha256 || "",
       apkUrl: item.apkUrl || "",
+      driveUrl: item.driveOriginalUrl || (isDrive ? item.apkUrl : ""),
       apkSizeBytes: item.apkSizeBytes || 0,
     });
     setApkFile(null);
@@ -117,46 +130,68 @@ export default function Settings() {
       setFormError("Version Name is required (e.g. '1.1').");
       return;
     }
-    if (!editingId && !apkFile && !form.apkUrl) {
-      setFormError("Please select an APK file to upload.");
-      return;
+
+    // Method-specific validation
+    if (form.distributionMethod === "drive") {
+      if (!form.driveUrl.trim()) {
+        setFormError("Google Drive share link is required.");
+        return;
+      }
+      if (!isValidGoogleDriveUrl(form.driveUrl)) {
+        setFormError("Invalid Google Drive share link. Please paste a link with a valid file ID.");
+        return;
+      }
+    } else {
+      // GitHub Releases
+      if (!editingId && !apkFile && !form.apkUrl) {
+        setFormError("Please select an APK file to upload to GitHub Releases.");
+        return;
+      }
     }
 
     setSaving(true);
     setUploadPct(0);
 
     try {
-      let apkUrl = form.apkUrl;
-      let apkSizeBytes = form.apkSizeBytes;
-      let apkSha256 = form.apkSha256;
+      let finalApkUrl = form.apkUrl;
+      let finalSizeBytes = form.apkSizeBytes;
+      let finalSha256 = form.apkSha256;
 
-      if (apkFile) {
-        setUploadPct(1);
-        const uploadResult = await uploadApkToGitHub(
-          apkFile,
-          {
-            versionName: form.versionName.trim(),
-            versionCode: code,
-            releaseNotes: form.releaseNotes.trim(),
-          },
-          setUploadPct
-        );
-        apkUrl = uploadResult.apkUrl;
-        apkSizeBytes = uploadResult.apkSizeBytes || apkFile.size;
-        if (uploadResult.sha256) {
-          apkSha256 = uploadResult.sha256;
+      if (form.distributionMethod === "drive") {
+        // Direct binary download link from Google Drive
+        finalApkUrl = toGoogleDriveDirectDownloadUrl(form.driveUrl);
+      } else {
+        // GitHub Releases upload
+        if (apkFile) {
+          setUploadPct(1);
+          const uploadResult = await uploadApkToGitHub(
+            apkFile,
+            {
+              versionName: form.versionName.trim(),
+              versionCode: code,
+              releaseNotes: form.releaseNotes.trim(),
+            },
+            setUploadPct
+          );
+          finalApkUrl = uploadResult.apkUrl;
+          finalSizeBytes = uploadResult.apkSizeBytes || apkFile.size;
+          if (uploadResult.sha256) {
+            finalSha256 = uploadResult.sha256;
+          }
         }
       }
 
       const payload = {
+        distributionMethod: form.distributionMethod,
         versionCode: code,
         versionName: form.versionName.trim(),
         releaseNotes: form.releaseNotes.trim(),
         isMandatory: Boolean(form.isMandatory),
         isActive: Boolean(form.isActive),
-        apkSha256: (apkSha256 || "").trim(),
-        apkUrl: apkUrl || "",
-        apkSizeBytes: apkSizeBytes || 0,
+        apkSha256: (finalSha256 || "").trim(),
+        apkUrl: finalApkUrl || "",
+        driveOriginalUrl: form.distributionMethod === "drive" ? form.driveUrl.trim() : "",
+        apkSizeBytes: finalSizeBytes || 0,
         publishedAt: form.isActive ? Date.now() : (form.publishedAt || null),
       };
 
@@ -177,7 +212,7 @@ export default function Settings() {
         editingId
           ? "Update record saved."
           : payload.isActive
-          ? "New version published! Push notification sent to all devices."
+          ? `Version ${payload.versionName} published via ${payload.distributionMethod === "drive" ? "Google Drive" : "GitHub Releases"}! Push notification sent to all devices.`
           : "Update draft saved. Publish whenever you're ready."
       );
       setTimeout(() => setSuccessMsg(""), 5000);
@@ -241,10 +276,10 @@ export default function Settings() {
           <div>
             <h2 style={{ margin: "0 0 6px 0", fontSize: "1.2rem" }}>App Update Management</h2>
             <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
-              Upload new production APKs and publish them to all installed SpotFree apps.
+              Publish new production APK releases via GitHub Releases or Google Drive.
             </p>
           </div>
-          <button onClick={openCreate}>+ Upload New Version</button>
+          <button onClick={openCreate}>+ Publish New Version</button>
         </div>
 
         {/* Current Live Version Banner */}
@@ -262,9 +297,21 @@ export default function Settings() {
               CURRENT LIVE VERSION
             </div>
             {latestActive ? (
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                 <strong style={{ fontSize: "1.1rem" }}>v{latestActive.versionName}</strong>
                 <span className="badge badge-live">Active</span>
+                <span className="badge" style={{
+                  background: latestActive.distributionMethod === "drive" || latestActive.apkUrl?.includes("drive.google.com")
+                    ? "rgba(66, 133, 244, 0.2)"
+                    : "rgba(168, 85, 247, 0.2)",
+                  color: latestActive.distributionMethod === "drive" || latestActive.apkUrl?.includes("drive.google.com")
+                    ? "#60a5fa"
+                    : "#c084fc",
+                }}>
+                  {latestActive.distributionMethod === "drive" || latestActive.apkUrl?.includes("drive.google.com")
+                    ? "Google Drive"
+                    : "GitHub Release"}
+                </span>
                 <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
                   (Build {latestActive.versionCode})
                 </span>
@@ -296,6 +343,7 @@ export default function Settings() {
             <thead>
               <tr>
                 <th>Version</th>
+                <th>Source</th>
                 <th>Build Code</th>
                 <th>Type</th>
                 <th>Release Notes</th>
@@ -305,47 +353,61 @@ export default function Settings() {
               </tr>
             </thead>
             <tbody>
-              {updates.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <strong>v{item.versionName}</strong>
-                  </td>
-                  <td>
-                    <code>{item.versionCode}</code>
-                  </td>
-                  <td>
-                    <span className="badge">
-                      {item.isMandatory ? "Mandatory" : "Optional"}
-                    </span>
-                  </td>
-                  <td className="truncate" style={{ maxWidth: "200px" }}>
-                    {item.releaseNotes || "—"}
-                  </td>
-                  <td>
-                    {item.apkSizeBytes
-                      ? `${(item.apkSizeBytes / (1024 * 1024)).toFixed(1)} MB`
-                      : "—"}
-                  </td>
-                  <td>
-                    <span className={item.isActive ? "badge badge-live" : "badge badge-draft"}>
-                      {item.isActive ? "Published" : "Draft"}
-                    </span>
-                  </td>
-                  <td className="row-actions">
-                    <button onClick={() => handleToggleActive(item)}>
-                      {item.isActive ? "Deactivate" : "Publish"}
-                    </button>
-                    <button onClick={() => openEdit(item)}>Edit</button>
-                    <button className="danger" onClick={() => setDeleteTarget(item)}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {updates.map((item) => {
+                const isDrive =
+                  item.distributionMethod === "drive" ||
+                  Boolean(item.apkUrl && item.apkUrl.includes("drive.google.com"));
+
+                return (
+                  <tr key={item.id}>
+                    <td>
+                      <strong>v{item.versionName}</strong>
+                    </td>
+                    <td>
+                      <span className="badge" style={{
+                        background: isDrive ? "rgba(66, 133, 244, 0.2)" : "rgba(168, 85, 247, 0.2)",
+                        color: isDrive ? "#60a5fa" : "#c084fc",
+                      }}>
+                        {isDrive ? "Google Drive" : "GitHub"}
+                      </span>
+                    </td>
+                    <td>
+                      <code>{item.versionCode}</code>
+                    </td>
+                    <td>
+                      <span className="badge">
+                        {item.isMandatory ? "Mandatory" : "Optional"}
+                      </span>
+                    </td>
+                    <td className="truncate" style={{ maxWidth: "200px" }}>
+                      {item.releaseNotes || "—"}
+                    </td>
+                    <td>
+                      {item.apkSizeBytes
+                        ? `${(item.apkSizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                        : "—"}
+                    </td>
+                    <td>
+                      <span className={item.isActive ? "badge badge-live" : "badge badge-draft"}>
+                        {item.isActive ? "Published" : "Draft"}
+                      </span>
+                    </td>
+                    <td className="row-actions">
+                      <button onClick={() => handleToggleActive(item)}>
+                        {item.isActive ? "Deactivate" : "Publish"}
+                      </button>
+                      <button onClick={() => openEdit(item)}>Edit</button>
+                      <button className="danger" onClick={() => setDeleteTarget(item)}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
               {updates.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="empty-state">
-                    No app updates yet. Click "+ Upload New Version" to publish your first update.
+                  <td colSpan={8} className="empty-state">
+                    No app updates yet. Click "+ Publish New Version" to publish your first update.
                   </td>
                 </tr>
               )}
@@ -360,6 +422,48 @@ export default function Settings() {
           <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={handleSave}>
             <h2>{editingId ? "Edit App Update" : "Publish New Version"}</h2>
 
+            {/* Distribution Method Selector */}
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontWeight: "600", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                APK DISTRIBUTION METHOD
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <button
+                  type="button"
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    border: form.distributionMethod === "github" ? "2px solid var(--violet)" : "1px solid var(--border)",
+                    background: form.distributionMethod === "github" ? "rgba(168, 85, 247, 0.15)" : "var(--surface-elevated)",
+                    color: form.distributionMethod === "github" ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontWeight: form.distributionMethod === "github" ? "600" : "400",
+                    cursor: "pointer",
+                    textAlign: "center"
+                  }}
+                  onClick={() => setForm({ ...form, distributionMethod: "github" })}
+                >
+                  GitHub Releases
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: "8px",
+                    border: form.distributionMethod === "drive" ? "2px solid #4285f4" : "1px solid var(--border)",
+                    background: form.distributionMethod === "drive" ? "rgba(66, 133, 244, 0.15)" : "var(--surface-elevated)",
+                    color: form.distributionMethod === "drive" ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontWeight: form.distributionMethod === "drive" ? "600" : "400",
+                    cursor: "pointer",
+                    textAlign: "center"
+                  }}
+                  onClick={() => setForm({ ...form, distributionMethod: "drive" })}
+                >
+                  Google Drive Link
+                </button>
+              </div>
+            </div>
+
+            {/* Version Name and Code */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <label>
                 Version Name *
@@ -384,6 +488,50 @@ export default function Settings() {
               </label>
             </div>
 
+            {/* Method-specific Inputs */}
+            {form.distributionMethod === "drive" ? (
+              <label>
+                Google Drive Share URL *
+                <input
+                  value={form.driveUrl}
+                  onChange={(e) => setForm({ ...form, driveUrl: e.target.value })}
+                  placeholder="https://drive.google.com/file/d/1.../view?usp=sharing"
+                  required
+                />
+                {form.driveUrl && isValidGoogleDriveUrl(form.driveUrl) ? (
+                  <span className="hint" style={{ color: "var(--teal)" }}>
+                    ✓ Direct APK download URL: {toGoogleDriveDirectDownloadUrl(form.driveUrl)}
+                  </span>
+                ) : form.driveUrl ? (
+                  <span className="hint" style={{ color: "#ff4757" }}>
+                    Invalid Google Drive URL. Must be a valid share or view link containing a file ID.
+                  </span>
+                ) : (
+                  <span className="hint">
+                    Paste any Google Drive share link. It will automatically convert to a direct binary download URL. Ensure the file sharing is set to "Anyone with the link".
+                  </span>
+                )}
+              </label>
+            ) : (
+              <label>
+                Production APK File {!editingId && "*"}
+                <input
+                  type="file"
+                  accept=".apk,application/vnd.android.package-archive"
+                  onChange={handleFileSelect}
+                  required={!editingId && !form.apkUrl}
+                />
+                {apkFile && (
+                  <span className="hint">
+                    Selected: {apkFile.name} ({(apkFile.size / (1024 * 1024)).toFixed(1)} MB)
+                  </span>
+                )}
+                {form.apkUrl && !apkFile && (
+                  <span className="hint">Current APK hosted on GitHub Releases. Choose a new file to replace it.</span>
+                )}
+              </label>
+            )}
+
             <label>
               Release Notes (What's New)
               <textarea
@@ -394,33 +542,44 @@ export default function Settings() {
               />
             </label>
 
-            <label>
-              Production APK File {!editingId && "*"}
-              <input
-                type="file"
-                accept=".apk,application/vnd.android.package-archive"
-                onChange={handleFileSelect}
-                required={!editingId && !form.apkUrl}
-              />
-              {apkFile && (
-                <span className="hint">
-                  Selected: {apkFile.name} ({(apkFile.size / (1024 * 1024)).toFixed(1)} MB)
-                </span>
-              )}
-              {form.apkUrl && !apkFile && (
-                <span className="hint">Current APK hosted on GitHub Releases. Choose a new file to replace it.</span>
-              )}
-            </label>
-
-            {form.apkSha256 && (
-              <label>
-                SHA-256 Checksum (auto-computed)
-                <input
-                  value={form.apkSha256}
-                  readOnly
-                  style={{ fontSize: "0.75rem", fontFamily: "monospace", opacity: 0.8 }}
-                />
-              </label>
+            {/* Checksum and Size fields */}
+            {form.distributionMethod === "drive" ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <label>
+                  APK Size in MB (optional)
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={form.apkSizeBytes ? (form.apkSizeBytes / (1024 * 1024)).toFixed(1) : ""}
+                    onChange={(e) => {
+                      const mb = parseFloat(e.target.value);
+                      setForm({ ...form, apkSizeBytes: isNaN(mb) ? 0 : Math.round(mb * 1024 * 1024) });
+                    }}
+                    placeholder="e.g. 23.3"
+                  />
+                </label>
+                <label>
+                  SHA-256 Checksum (optional)
+                  <input
+                    value={form.apkSha256}
+                    onChange={(e) => setForm({ ...form, apkSha256: e.target.value.trim() })}
+                    placeholder="e.g. 0d4b8646..."
+                    style={{ fontSize: "0.75rem", fontFamily: "monospace" }}
+                  />
+                </label>
+              </div>
+            ) : (
+              form.apkSha256 && (
+                <label>
+                  SHA-256 Checksum (auto-computed)
+                  <input
+                    value={form.apkSha256}
+                    readOnly
+                    style={{ fontSize: "0.75rem", fontFamily: "monospace", opacity: 0.8 }}
+                  />
+                </label>
+              )
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "10px", margin: "8px 0" }}>
@@ -443,7 +602,7 @@ export default function Settings() {
               </label>
             </div>
 
-            {saving && uploadPct > 0 && (
+            {saving && uploadPct > 0 && form.distributionMethod === "github" && (
               <div style={{ margin: "12px 0" }}>
                 <p className="hint">
                   {uploadPct < 100
